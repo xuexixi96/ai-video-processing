@@ -1,43 +1,212 @@
-my-ai-video-project/
-├── public/
-│   └── index.html
-├── src/
-│   ├── App.js
-│   ├── index.js
-│   └── components/
-├── package.json
-├── vercel.json
-└── README.md
+系统架构
+text
+前端 (Next.js) → Vercel Edge Functions → AI处理API → 云存储 (S3/R2) → 视频平台API
+核心文件结构
+bash
+/vercel-app
+├── app/
+│   ├── api/
+│   │   ├── process/route.js       # 视频处理入口
+│   │   └── check-status/route.js  # 任务状态检查
+├── lib/
+│   ├── videoProcessor.js          # 视频处理核心逻辑
+│   ├── aiDetector.js              # AI原创度检测
+│   └── platformUploader.js        # 多平台发布
+├── .env                           # 环境变量
+├── vercel.json                    # Vercel配置
+└── package.json
+关键代码实现
+API路由 (app/api/process/route.js)
+
+javascript
+import { NextResponse } from 'next/server';
+import { processVideo } from '@/lib/videoProcessor';
+
+export const config = {
+  runtime: 'edge',  // 使用Vercel Edge Runtime
+};
+
+export async function POST(req) {
+  const formData = await req.formData();
+  const videoFile = formData.get('video');
+  const watermark = formData.get('watermark');
+  const platforms = formData.getAll('platforms');
+
+  try {
+    const taskId = await processVideo(videoFile, watermark, platforms);
+    return NextResponse.json({ 
+      taskId, 
+      statusUrl: `/api/check-status?taskId=${taskId}` 
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: '视频处理失败: ' + error.message },
+      { status: 500 }
+    );
+  }
+}
+视频处理核心 (lib/videoProcessor.js)
+
+javascript
+import { put } from '@vercel/blob';
+import { detectOriginality } from './aiDetector';
+import { uploadToPlatforms } from './platformUploader';
+
+export async function processVideo(videoFile, watermark, platforms) {
+  // 1. 生成唯一任务ID
+  const taskId = crypto.randomUUID();
+  
+  // 2. 视频预处理 (FFmpeg.wasm)
+  const processedVideo = await applyEffects(videoFile, {
+    watermark,
+    resize: { width: 1080, height: 1920 }, // 调整比例
+    metadata: generateUniqueMetadata()       // 修改元数据
+  });
+
+  // 3. AI原创度检测 (Hugging Face API)
+  const { originalityScore, feedback } = await detectOriginality(
+    processedVideo, 
+    videoFile  // 原始视频对比
+  );
+
+  if (originalityScore < 0.85) {
+    throw new Error('原创度不足: ' + feedback);
+  }
+
+  // 4. 存储处理后的视频
+  const { url } = await put(`${taskId}.mp4`, processedVideo, {
+    access: 'public',
+    contentType: 'video/mp4'
+  });
+
+  // 5. 异步上传到平台
+  uploadToPlatforms(url, platforms, taskId);
+
+  return taskId;
+}
+
+// FFmpeg处理示例 (使用WebAssembly)
+async function applyEffects(video, options) {
+  // 伪代码 - 实际需使用ffmpeg.wasm
+  const ffmpeg = new FFmpeg();
+  await ffmpeg.load();
+  await ffmpeg.write('input.mp4', video);
+  
+  let command = '-vf "';
+  command += `scale=${options.resize.width}:${options.resize.height},`;
+  command += `drawtext=text='${options.watermark}':x=10:y=10:fontsize=24:fontcolor=white" `;
+  command += '-metadata title="' + generateUniqueTitle() + '" ';
+  command += 'output.mp4';
+  
+  await ffmpeg.exec(command.split(' '));
+  return await ffmpeg.readFile('output.mp4');
+}
+AI原创度检测 (lib/aiDetector.js)
+
+javascript
+import { HuggingFaceInference } from 'huggingface';
+
+const hf = new HuggingFaceInference(process.env.HF_API_KEY);
+
+export async function detectOriginality(processedVideo, originalVideo) {
+  // 使用视频相似度检测模型
+  const response = await hf.videoClassificationRequest({
+    inputs: {
+      processed: processedVideo,
+      reference: originalVideo,
+    },
+    model: "facebook/video-similarity-detector",
+    parameters: {
+      threshold: 0.85
+    }
+  });
+
+  // 解析模型输出
+  const [result] = response;
+  return {
+    originalityScore: result.score,
+    feedback: result.label === 'ORIGINAL' ? 
+      '符合原创要求' : 
+      `检测到相似内容: ${result.matched_segments}`
+  };
+}
+多平台上传 (lib/platformUploader.js)
+
+javascript
+const PLATFORM_APIS = {
+  douyin: {
+    endpoint: 'https://open.douyin.com/api/v2/',
+    method: 'POST'
+  },
+  kuaishou: {
+    endpoint: 'https://open.kuaishou.com/',
+    method: 'PUT'
+  },
+  wechat: {
+    endpoint: 'https://api.weixin.qq.com/',
+    method: 'POST'
+  }
+};
+
+export async function uploadToPlatforms(videoUrl, platforms, taskId) {
+  // 异步处理避免阻塞主线程
+  setTimeout(async () => {
+    for (const platform of platforms) {
+      const config = PLATFORM_APIS[platform];
+      
+      await fetch(config.endpoint + 'video/upload', {
+        method: config.method,
+        headers: {
+          'Authorization': `Bearer ${process.env[`${platform.toUpperCase()}_TOKEN`]}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          video_url: videoUrl,
+          task_id: taskId,
+          schedule_time: Date.now() + 3600000 // 1小时后发布
+        })
+      });
+    }
+  }, 0);
+}
+环境变量配置 (.env)
+env
+# Hugging Face AI
+HF_API_KEY=hf_xxxxxxxxxxxxxxxx
+
+# 平台API密钥
+DOUYIN_TOKEN=dy_xxxxxxxxxxxx
+KUAISHOU_TOKEN=ks_xxxxxxxxxx
+WECHAT_TOKEN=wx_xxxxxxxxxxxx
+
+# 云存储
+BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxxxxxx
+Vercel配置 (vercel.json)
+json
 {
-  "version": 2,
   "builds": [
     {
       "src": "package.json",
-      "use": "@vercel/static-build"
+      "use": "@vercel/next"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "src": "/api/.*",
+      "dest": "app/api/$1",
+      "methods": ["GET", "POST"]
     }
-  ]
-}
-{
-  "name": "my-ai-video-project",
-  "version": "1.0.0",
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "dependencies": {
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "react-scripts": "5.0.0",
-    "ffmpeg.js": "^4.0.0",
-    "@tensorflow/tfjs": "^3.0.0",
-    "axios": "^0.21.1"
+  ],
+  "env": {
+    "ENABLE_EDGE_FUNCTIONS": "1"
   }
 }
+部署步骤
+安装依赖
+
+bash
+npm install @vercel/blob ffmpeg.wasm huggingface.js
+部署到Vercel
+
+bash
+vercel deploy --prod
