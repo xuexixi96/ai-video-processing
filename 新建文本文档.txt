@@ -1,0 +1,116 @@
+npx create-react-app ai-video-processing
+cd ai-video-processing
+npm install antd axios
+import React, { useState } from "react";
+import { Upload, Button, Progress, message } from "antd";
+import { UploadOutlined } from "@ant-design/icons";
+import axios from "axios";
+
+function App() {
+  const [fileList, setFileList] = useState([]);
+  const [processing, setProcessing] = useState(false);
+  const [originalityScore, setOriginalityScore] = useState(null);
+  const [report, setReport] = useState(null);
+
+  // 上传视频
+  const handleUpload = (info) => {
+    const { status } = info.file;
+    if (status === "done") {
+      message.success(`${info.file.name} 文件上传成功`);
+    } else if (status === "error") {
+      message.error(`${info.file.name} 文件上传失败`);
+    }
+  };
+
+  // 模拟 AI 处理
+  const handleProcessVideo = async () => {
+    setProcessing(true);
+    try {
+      // 模拟 AI 处理
+      const score = Math.floor(Math.random() * 100);
+      const analysis = {
+        originalityScore: score,
+        details: [
+          { name: "画面原创度", value: `${score}%` },
+          { name: "音频原创度", value: `${score}%` },
+          { name: "内容重复率", value: `${100 - score}%` },
+        ],
+      };
+      setOriginalityScore(score);
+      setReport(analysis);
+    } catch (error) {
+      message.error("视频处理失败");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // 导出分析报告
+  const handleDownloadReport = () => {
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "analysis_report.json";
+    link.click();
+  };
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>AI 视频处理平台</h2>
+
+      {/* 上传视频 */}
+      <Upload
+        action="/upload" // 上传路径可以配置为实际上传路径
+        listType="picture"
+        fileList={fileList}
+        onChange={handleUpload}
+      >
+        <Button icon={<UploadOutlined />}>上传视频</Button>
+      </Upload>
+
+      {/* 模拟处理按钮 */}
+      <Button
+        type="primary"
+        onClick={handleProcessVideo}
+        loading={processing}
+        style={{ marginTop: 20 }}
+      >
+        一键AI处理视频
+      </Button>
+
+      {/* 进度条展示 */}
+      {processing && <Progress percent={50} status="active" />}
+
+      {/* 显示原创度评分 */}
+      {originalityScore !== null && !processing && (
+        <div style={{ marginTop: 20 }}>
+          <h3>原创度评分：{originalityScore}%</h3>
+          {report && (
+            <div>
+              <h4>分析报告</h4>
+              <ul>
+                {report.details.map((item, index) => (
+                  <li key={index}>
+                    {item.name}: {item.value}
+                  </li>
+                ))}
+              </ul>
+              <Button
+                type="dashed"
+                onClick={handleDownloadReport}
+                style={{ marginTop: 20 }}
+              >
+                下载分析报告
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;
+npm start
